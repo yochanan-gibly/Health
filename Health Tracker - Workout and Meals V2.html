@@ -2611,34 +2611,148 @@ function saveGoalSettings(){
 }
 function exportCSV(){
   const wU=wLabel(),fU=fLabel();
-  const rows=[[`Week`,`Day`,`Date`,`Category`,`Exercise`,`Set`,`Weight (${wU})`,`Reps`,`Time (min)`,`Notes`,`Done`,`Steps`,`Water (${fU})`,`Weight Morning (${wU})`,`Weight Evening (${wU})`]];
-  for(let o=-12;o<=0;o++){
-    const wk=wkKey(o),base=wkStart(o);
-    DAYS.forEach((day,i)=>{
-      const date=new Date(base);date.setDate(date.getDate()+i);
-      const dateStr=date.toLocaleDateString('en-US');
-      const plan=PLAN[day];
+
+  // ── Header ──────────────────────────────────────────────────────────────────
+  const header=['Date','Day','Week','Mode','Category','Exercise / Item','Set',
+    `Weight (${wU})`,'Reps',`Time (min)`,'Notes','Done',
+    'Steps',`Water (${fU})`,`Body Weight Morning (${wU})`,`Body Weight Evening (${wU})`];
+  const rows=[header];
+
+  // ── Collect every week that appears in logs ──────────────────────────────────
+  const wkSet=new Set();
+  // Always include current + past 52 weeks to catch everything
+  for(let o=-52;o<=0;o++) wkSet.add(wkKey(o));
+  // Also pull any wk prefix from stored keys
+  Object.keys(logs).forEach(k=>{
+    const parts=k.split('|');
+    if(parts[0]==='daily'&&parts[1]) wkSet.add(parts[1]);
+    else if(parts.length>=3&&/^\d{4}-\d{2}-\d{2}$/.test(parts[0])) wkSet.add(parts[0]);
+  });
+
+  // Sort weeks chronologically
+  const sortedWks=[...wkSet].sort();
+
+  sortedWks.forEach(wk=>{
+    // Reconstruct wkStart from wk key string
+    const wkDate=new Date(wk+'T00:00:00');
+
+    DAYS.forEach((day,di)=>{
+      const date=new Date(wkDate);date.setDate(date.getDate()+di);
+      const dateStr=date.toLocaleDateString('en-US',{year:'numeric',month:'2-digit',day:'2-digit'});
+      const wkLabel=date.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+
+      // Daily trackers
       const steps=logs[`daily|${wk}|${day}|steps`]||'';
       const water=logs[`daily|${wk}|${day}|water`]||'';
       const wm=logs[`daily|${wk}|${day}|weight_morning`]||'';
       const we=logs[`daily|${wk}|${day}|weight_evening`]||'';
-      ['gym','home'].forEach(m=>{
-        const exs=plan[m]||[];
-        const cLog=logs[lk(wk,day,'cardio',0)];
-        if(cLog)rows.push([weekLabel(o),day,dateStr,'Cardio',plan.cardio?.[m]?.name||'Cardio','','','',cLog.time||'',cLog.note||'',cLog.done?'Yes':'No',steps,water,wm,we]);
-        exs.forEach((ex,ei)=>{
-          const log=logs[lk(wk,day,'ex',ei)];if(!log)return;
-          if(log.sets?.length>0){log.sets.forEach((sv,si)=>rows.push([weekLabel(o),day,dateStr,m,ex.name,si+1,sv.weight||'',sv.reps||'',sv.time||'',si===0?log.note||'':'',log.done?'Yes':'No',steps,water,wm,we]));}
-          else rows.push([weekLabel(o),day,dateStr,m,ex.name,'','','','',log.note||'',log.done?'Yes':'No',steps,water,wm,we]);
+      const hasDailyData=steps||water||wm||we;
+
+      const plan=PLAN[day];
+
+      // Cardio
+      const cLog=logs[lk(wk,day,'cardio',0)];
+      if(cLog){
+        ['gym','home'].forEach(m=>{
+          const cName=plan?.cardio?.[m]?.name||'Cardio';
+          rows.push([dateStr,day,wkLabel,m,'Cardio',cName,'','','',
+            cLog.time||'',cLog.note||'',cLog.done?'Yes':'',
+            steps,water,wm,we]);
+        });
+      } else if(hasDailyData&&!plan){
+        // No plan for this day but has daily data — emit one row
+        rows.push([dateStr,day,wkLabel,'','','','','','','','','',steps,water,wm,we]);
+      }
+
+      // Stretches
+      ['morning','evening'].forEach(period=>{
+        STRETCHES[period].forEach((s,si)=>{
+          const sLog=logs[lk(wk,day,'stretch_'+period,si)];
+          if(sLog&&sLog.done){
+            rows.push([dateStr,day,wkLabel,'',`Stretch (${period})`,s.name,'','','','','Yes',steps,water,wm,we]);
+          }
+        });
+      });
+
+      // Exercises — both gym and home
+      if(plan){
+        ['gym','home'].forEach(m=>{
+          const exs=plan[m]||[];
+          exs.forEach((ex,ei)=>{
+            const log=logs[lk(wk,day,'ex',ei)];
+            if(!log) return; // nothing logged for this exercise — skip
+
+            const hasSets=log.sets&&log.sets.length>0&&log.sets.some(sv=>sv.weight||sv.reps||sv.time);
+
+            if(hasSets){
+              log.sets.forEach((sv,si)=>{
+                // Only emit set row if it has any data
+                if(!sv.weight&&!sv.reps&&!sv.time&&si>0) return;
+                rows.push([dateStr,day,wkLabel,m,'Strength',ex.name,si+1,
+                  sv.weight||'',sv.reps||'',sv.time||'',
+                  si===0?(log.note||''):'',
+                  log.done?'Yes':'',
+                  steps,water,wm,we]);
+              });
+            } else {
+              // Log exists but no set data — emit one row with done/notes
+              rows.push([dateStr,day,wkLabel,m,'Strength',ex.name,'','','','',
+                log.note||'',log.done?'Yes':'',steps,water,wm,we]);
+            }
+          });
+        });
+
+        // If only daily data and no exercise logs, emit a daily summary row
+        if(hasDailyData&&!cLog){
+          const hasAnyEx=(['gym','home'].some(m=>(plan[m]||[]).some((_,ei)=>logs[lk(wk,day,'ex',ei)])));
+          const hasAnyStretch=['morning','evening'].some(period=>STRETCHES[period].some((_,si)=>logs[lk(wk,day,'stretch_'+period,si)]));
+          if(!hasAnyEx&&!hasAnyStretch){
+            rows.push([dateStr,day,wkLabel,'','Daily','','','','','','','',steps,water,wm,we]);
+          }
+        }
+      }
+
+      // Meal logs — custom added foods
+      MEAL_TYPES.forEach(mt=>{
+        const mFoods=getCustomMealFoods(mealsDateKey(
+          Math.round((date.getTime()-new Date().setHours(0,0,0,0))/(86400000))
+        ),mt);
+        mFoods.forEach(f=>{
+          rows.push([dateStr,day,wkLabel,'meals',`Meal: ${mt}`,f.name,'',
+            '',f.serving||'','',f.checked?'Eaten':'Skipped','',steps,water,wm,we]);
+        });
+        // Plan meal checkboxes
+        const planDay=DEFAULT_DIET_PLAN[day]||DEFAULT_DIET_PLAN['Monday'];
+        (planDay[mt]||[]).forEach((item,idx)=>{
+          const checked=getMealCheck(
+            date.toISOString().slice(0,10),mt,`plan_${idx}`
+          );
+          if(checked){
+            rows.push([dateStr,day,wkLabel,'meals',`Meal: ${mt}`,item.name,'',
+              '',item.serving||'','','Eaten','',steps,water,wm,we]);
+          }
         });
       });
     });
-  }
-  const csv=rows.map(r=>r.map(c=>'"'+String(c).replace(/"/g,'""')+'"').join(',')).join('\n');
-  const blob=new Blob([csv],{type:'text/csv'});
+  });
+
+  // ── De-duplicate: only keep rows that have at least one non-empty data field ─
+  const dataRows=rows.slice(1).filter(r=>{
+    // Cols 6 onwards (Set, Weight, Reps, Time, Notes, Done, Steps, Water, WM, WE)
+    return r.slice(5).some(v=>v!==''&&v!==null&&v!==undefined);
+  });
+
+  const allRows=[header,...dataRows];
+  const csv=allRows.map(r=>r.map(c=>'"'+String(c===null||c===undefined?'':c).replace(/"/g,'""')+'"').join(',')).join('\n');
+
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
   const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download=`workout_data_${new Date().toISOString().slice(0,10)}.csv`;a.click();
-  URL.revokeObjectURL(url);showToast('CSV downloaded!');
+  const a=document.createElement('a');
+  a.href=url;
+  a.download=`workout_tracker_${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(`CSV exported — ${dataRows.length} rows`);
 }
 function importCSV(input){
   const file=input.files[0];
