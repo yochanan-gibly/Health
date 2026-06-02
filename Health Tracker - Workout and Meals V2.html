@@ -394,14 +394,14 @@ textarea.note{width:100%;margin-top:8px;padding:8px;border:1px solid var(--borde
     <button class="nav-btn active" onclick="showPage('workout',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6.5 6.5h11M6.5 17.5h11M4 12h16"/><circle cx="4" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="20" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>Workout
     </button>
+    <button class="nav-btn" onclick="showPage('meals',this)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>Meals
+    </button>
     <button class="nav-btn" onclick="showPage('stats',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>Progress
     </button>
     <button class="nav-btn" onclick="showPage('graphs',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 17 9 11 13 15 21 7"/><polyline points="14 7 21 7 21 14"/></svg>Graphs
-    </button>
-    <button class="nav-btn" onclick="showPage('meals',this)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>Meals
     </button>
     <button class="nav-btn" onclick="showPage('settings',this)">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>Settings
@@ -2575,6 +2575,13 @@ function renderSettingsPage(){
         <div><div class="s-title">Export data</div><div class="s-sub">Download all logs as CSV</div></div>
         <button class="s-btn s-btn-green" onclick="exportCSV()">Download CSV</button>
       </div>
+      <div class="settings-row">
+        <div><div class="s-title">Import data</div><div class="s-sub">Restore from a previously exported CSV</div></div>
+        <label class="s-btn s-btn-blue" style="cursor:pointer;">
+          Upload CSV
+          <input type="file" accept=".csv" style="display:none" onchange="importCSV(this)">
+        </label>
+      </div>
     </div>
     <div class="settings-item">
       <div class="settings-row">
@@ -2633,6 +2640,135 @@ function exportCSV(){
   const a=document.createElement('a');a.href=url;a.download=`workout_data_${new Date().toISOString().slice(0,10)}.csv`;a.click();
   URL.revokeObjectURL(url);showToast('CSV downloaded!');
 }
+function importCSV(input){
+  const file=input.files[0];
+  if(!file)return;
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const text=e.target.result;
+      const lines=text.split(/\r?\n/).filter(l=>l.trim());
+      if(lines.length<2){showToast('CSV appears empty');return;}
+
+      // Parse CSV rows — handle quoted fields with commas inside
+      function parseCSVLine(line){
+        const res=[];let cur='';let inQ=false;
+        for(let i=0;i<line.length;i++){
+          const c=line[i];
+          if(c==='"'){
+            if(inQ&&line[i+1]==='"'){cur+='"';i++;}
+            else inQ=!inQ;
+          } else if(c===','&&!inQ){res.push(cur.trim());cur='';}
+          else cur+=c;
+        }
+        res.push(cur.trim());
+        return res;
+      }
+
+      const header=parseCSVLine(lines[0]).map(h=>h.toLowerCase().replace(/[^a-z0-9]/g,'_'));
+      // Expected header cols (from exportCSV):
+      // week, day, date, category, exercise, set, weight, reps, time, notes, done, steps, water, weight_morning, weight_evening
+      const col=name=>header.indexOf(name);
+      const iWeek=col('week'),iDay=col('day'),iDate=col('date'),iCat=col('category');
+      const iEx=col('exercise'),iSet=col('set'),iWeight=header.findIndex(h=>h.startsWith('weight_')?false:h==='weight__lb_'||h==='weight'),iReps=col('reps'),iTime=col('time__min_');
+      const iNotes=col('notes'),iDone=col('done'),iSteps=col('steps'),iWater=col('water');
+      const iWM=header.findIndex(h=>h.includes('weight_morning')||h.includes('morning'));
+      const iWE=header.findIndex(h=>h.includes('weight_evening')||h.includes('evening'));
+
+      if(iDay<0||iDate<0){showToast('CSV format not recognized. Please use a file exported from this app.');return;}
+
+      let imported=0,skipped=0;
+      const newLogs={...logs};
+
+      lines.slice(1).forEach(line=>{
+        if(!line.trim())return;
+        const cols=parseCSVLine(line);
+        const day=cols[iDay]?.trim();
+        const dateStr=cols[iDate]?.trim();
+        const cat=cols[iCat]?.trim().toLowerCase();
+        const exName=cols[iEx]?.trim();
+        const setNum=parseInt(cols[iSet])||0;
+        const done=(cols[iDone]||'').trim().toLowerCase()==='yes';
+        const notes=(cols[iNotes]||'').trim();
+        const steps=parseFloat(cols[iSteps])||0;
+        const water=parseFloat(cols[iWater])||0;
+        const wm=parseFloat(cols[iWM])||0;
+        const we=parseFloat(cols[iWE])||0;
+
+        if(!day||!dateStr)return;
+
+        // Convert date string to wkKey
+        let wk;
+        try{
+          const d=new Date(dateStr);
+          if(isNaN(d.getTime())){skipped++;return;}
+          d.setHours(0,0,0,0);
+          const sun=new Date(d);sun.setDate(d.getDate()-d.getDay());
+          wk=sun.toISOString().slice(0,10);
+        }catch(err){skipped++;return;}
+
+        // Daily trackers
+        if(steps>0){
+          const k=`daily|${wk}|${day}|steps`;
+          if(!newLogs[k]||newLogs[k]<steps)newLogs[k]=steps;
+        }
+        if(water>0){
+          const k=`daily|${wk}|${day}|water`;
+          if(!newLogs[k]||newLogs[k]<water)newLogs[k]=water;
+        }
+        if(wm>0){newLogs[`daily|${wk}|${day}|weight_morning`]=wm;}
+        if(we>0){newLogs[`daily|${wk}|${day}|weight_evening`]=we;}
+
+        // Exercise / cardio data
+        if(exName&&cat){
+          // Find exercise index in plan
+          const plan=PLAN[day];
+          if(!plan)return;
+          if(cat==='cardio'){
+            const k=lk(wk,day,'cardio',0);
+            if(!newLogs[k])newLogs[k]={done:false,sets:[]};
+            if(done)newLogs[k].done=true;
+            if(notes)newLogs[k].note=notes;
+          } else {
+            // gym or home mode
+            const mode=cat==='gym'?'gym':'home';
+            const exList=plan[mode]||[];
+            const exIdx=exList.findIndex(e=>e.name.toLowerCase()===exName.toLowerCase());
+            if(exIdx<0)return;
+            const k=lk(wk,day,'ex',exIdx);
+            if(!newLogs[k])newLogs[k]={done:false,sets:[]};
+            if(done)newLogs[k].done=true;
+            if(notes&&!newLogs[k].note)newLogs[k].note=notes;
+            if(setNum>0){
+              const si=setNum-1;
+              while(newLogs[k].sets.length<=si)newLogs[k].sets.push({});
+              const wVal=iWeight>=0?(cols[iWeight]||'').trim():'';
+              const rVal=iReps>=0?(cols[iReps]||'').trim():'';
+              const tVal=iTime>=0?(cols[iTime]||'').trim():'';
+              if(wVal)newLogs[k].sets[si].weight=wVal;
+              if(rVal)newLogs[k].sets[si].reps=rVal;
+              if(tVal)newLogs[k].sets[si].time=tVal;
+            }
+          }
+        }
+        imported++;
+      });
+
+      logs=newLogs;
+      saveData();
+      showToast(`Imported ${imported} rows successfully!`);
+      // reset file input
+      input.value='';
+      renderSettingsPage();
+    }catch(err){
+      console.error('CSV import error:',err);
+      showToast('Import failed — check file format');
+      input.value='';
+    }
+  };
+  reader.readAsText(file);
+}
+
 function clearData(){
   if(confirm('Delete all workout data? This cannot be undone.')){
     localStorage.removeItem('wt_logs');logs={};showToast('All data cleared');renderWorkoutPage();
